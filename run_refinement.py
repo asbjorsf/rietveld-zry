@@ -24,11 +24,13 @@ import argparse
 import json
 from pathlib import Path
 
+import matplotlib
+matplotlib.use('Agg')   # non-interactive backend – works without a display
 import numpy as np
 
 from crystal_structures import CubicZrO2, TetragonalZrO2
 from refinement import RietveldRefinement
-from plotting import plot_rietveld, plot_all_samples
+from plotting import plot_rietveld, plot_phase_contributions, plot_all_samples
 
 
 # ─── Constants ───────────────────────────────────────────────────────────────
@@ -129,8 +131,10 @@ def refine_file(filepath, x_Y_guess=0.05, plot=True, save_results=True):
 
     # ── Plot
     if plot:
-        save_fig = filepath.parent / f'{stem}_rietveld.png'
+        save_fig  = filepath.parent / f'{stem}_rietveld.png'
+        save_fig2 = filepath.parent / f'{stem}_contributions.png'
         plot_rietveld(ref, title=stem, save_path=str(save_fig))
+        plot_phase_contributions(ref, title=stem, save_path=str(save_fig2))
 
     # ── Collect results
     from rietveld_engine import rwp as _rwp, rp as _rp
