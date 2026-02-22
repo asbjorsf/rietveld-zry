@@ -30,7 +30,8 @@ import numpy as np
 
 from crystal_structures import CubicZrO2, TetragonalZrO2
 from refinement import RietveldRefinement
-from plotting import plot_rietveld, plot_phase_contributions, plot_all_samples
+from plotting import (plot_rietveld, plot_phase_contributions,
+                      plot_zoom_contributions, plot_all_samples)
 
 
 # ─── Constants ───────────────────────────────────────────────────────────────
@@ -133,8 +134,16 @@ def refine_file(filepath, x_Y_guess=0.05, plot=True, save_results=True):
     if plot:
         save_fig  = filepath.parent / f'{stem}_rietveld.png'
         save_fig2 = filepath.parent / f'{stem}_contributions.png'
+        save_fig3 = filepath.parent / f'{stem}_zoom_35deg.png'
+        save_fig4 = filepath.parent / f'{stem}_zoom_60deg.png'
         plot_rietveld(ref, title=stem, save_path=str(save_fig))
         plot_phase_contributions(ref, title=stem, save_path=str(save_fig2))
+        plot_zoom_contributions(ref, tth_center=35.0, half_window=2.0,
+                                title=f'{stem}  –  2θ ≈ 35°',
+                                save_path=str(save_fig3))
+        plot_zoom_contributions(ref, tth_center=60.5, half_window=2.5,
+                                title=f'{stem}  –  2θ ≈ 60°',
+                                save_path=str(save_fig4))
 
     # ── Collect results
     from rietveld_engine import rwp as _rwp, rp as _rp
