@@ -31,6 +31,54 @@ from scipy.optimize import least_squares
 from rietveld_engine import (calculate_pattern,
                               rwp as _rwp, rp as _rp, chi2 as _chi2)
 
+# ─── Background initialisation ────────────────────────────────────────────────
+
+N_BG_TERMS = 10   # number of Chebyshev background coefficients
+
+
+def _init_chebyshev_background(two_theta, y_obs, n_terms=N_BG_TERMS,
+                                n_windows=50):
+    """
+    Estimate starting Chebyshev background via sliding-minimum.
+
+    Divides the pattern into overlapping windows, finds the intensity
+    minimum in each, then fits a Chebyshev polynomial through those
+    minimum points.  This gives a starting background that hugs the
+    valleys of the diffraction pattern before the full optimisation.
+
+    numpy.polynomial.chebyshev uses the same T_n recurrence and [-1,1]
+    mapping as our chebyshev_background(), so coefficients are directly
+    compatible.
+    """
+    n      = len(two_theta)
+    wsize  = max(n // n_windows, 1)
+    bg_x, bg_y = [], []
+
+    for i in range(n_windows):
+        s = i * wsize
+        e = min(s + wsize + wsize // 2, n)   # 50 % overlap
+        if s >= n:
+            break
+        idx = s + np.argmin(y_obs[s:e])
+        bg_x.append(two_theta[idx])
+        bg_y.append(y_obs[idx])
+
+    bg_x = np.array(bg_x)
+    bg_y = np.array(bg_y)
+
+    # Map to [-1, 1] (same convention as chebyshev_background)
+    tth_min = two_theta.min()
+    tth_max = two_theta.max()
+    x_norm  = 2.0 * (bg_x - tth_min) / (tth_max - tth_min) - 1.0
+
+    deg    = min(n_terms - 1, len(bg_x) - 2)
+    coeffs = np.polynomial.chebyshev.chebfit(x_norm, bg_y, deg)
+
+    # Pad or truncate to exactly n_terms
+    if len(coeffs) < n_terms:
+        coeffs = np.pad(coeffs, (0, n_terms - len(coeffs)))
+    return coeffs[:n_terms]
+
 
 class RietveldRefinement:
     """Multi-phase Rietveld refinement for the Zr(1-x)Y(x)O(2-x/2) system."""
@@ -45,8 +93,8 @@ class RietveldRefinement:
 
         # ── Global parameters (initial values) ──────────────────────────────
         self.scale_factors = [1.0] * len(phases)
-        self.bg_coeffs     = np.array([np.percentile(y_obs, 5),
-                                        0.0, 0.0, 0.0, 0.0, 0.0])
+        self.bg_coeffs     = _init_chebyshev_background(
+                                 self.two_theta, self.y_obs, N_BG_TERMS)
         self.U           =  0.010
         self.V           = -0.005
         self.W           =  0.010
@@ -208,8 +256,8 @@ class RietveldRefinement:
                       for i, ph in enumerate(self.phases)
                       if ph.crystal_system == 'tetragonal']
 
-        scale_params = [f'scale_{i}' for i in range(n)]
-        bg_params    = ['bg_0', 'bg_1', 'bg_2', 'bg_3', 'bg_4']
+        scale_params   = [f'scale_{i}' for i in range(n)]
+        bg_params      = [f'bg_{i}' for i in range(N_BG_TERMS)]
         profile_params = ['U', 'V', 'W', 'eta']
 
         steps = [
