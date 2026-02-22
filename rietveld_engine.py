@@ -3,22 +3,89 @@ Core Rietveld pattern calculation for Cu Kα powder X-ray diffraction.
 
 Key components
 --------------
+snip_background       : SNIP peak-stripping background estimate (signal processing)
+chebyshev_background  : Chebyshev polynomial background (refineable)
 generate_reflections  : enumerate observable (hkl) reflections for a phase
 lorentz_polarization  : LP correction (optionally with graphite monochromator)
 caglioti_fwhm         : Caglioti peak-width formula
 pseudo_voigt          : normalised profile function
-chebyshev_background  : stable polynomial background
 calculate_pattern     : assemble the full calculated pattern
 Rwp, Rp, chi2         : agreement indices
 """
 
 import numpy as np
+from scipy.ndimage import uniform_filter1d
 
 # ─── Wavelengths ─────────────────────────────────────────────────────────────
 
 LAMBDA_Ka1 = 1.540562   # Angstrom
 LAMBDA_Ka2 = 1.544390   # Angstrom
 Ka2_Ka1_RATIO = 0.5     # relative intensity  I(Kα2)/I(Kα1)
+
+
+# ─── SNIP background estimation ──────────────────────────────────────────────
+
+def snip_background(y_obs, max_window=None, smooth_window=None):
+    """
+    Statistics-sensitive Non-linear Iterative Peak-clipping (SNIP).
+
+    Reference:  Ryan & Jamieson, Spectrochim. Acta Part B 43 (1988) 1553.
+
+    The algorithm progressively erodes peaks by replacing each point with
+    the average of its two neighbours at distance *w*, but only if that
+    average is lower than the current value.  Iterating from large *w*
+    down to 1 strips peaks while leaving the slowly-varying background intact.
+
+    Parameters
+    ----------
+    y_obs        : 1-D intensity array
+    max_window   : starting window half-width in data points.
+                   Default: n // 30  (≈ 3° for a 90° pattern at 0.013°/step)
+    smooth_window: Gaussian smoothing after stripping (points).
+                   Default: max_window // 8
+
+    Returns
+    -------
+    bg : 1-D background array, same shape as y_obs
+    """
+    n = len(y_obs)
+    if max_window is None:
+        max_window = max(n // 30, 5)
+    if smooth_window is None:
+        smooth_window = max(max_window // 8, 3)
+
+    bg = y_obs.astype(float).copy()
+    idx = np.arange(n)
+
+    for w in range(max_window, 0, -1):
+        i_lo = np.clip(idx - w, 0, n - 1)
+        i_hi = np.clip(idx + w, 0, n - 1)
+        avg  = 0.5 * (bg[i_lo] + bg[i_hi])
+        bg   = np.minimum(bg, avg)
+
+    # Light smoothing to remove residual noise from the stripped background
+    if smooth_window > 1:
+        bg = uniform_filter1d(bg, size=smooth_window)
+
+    return bg
+
+
+def fit_chebyshev_to_background(two_theta, bg_array, n_terms):
+    """
+    Fit a Chebyshev polynomial to a pre-estimated background array.
+
+    Uses the same [-1, 1] x-mapping as chebyshev_background() so that
+    the returned coefficients are directly compatible.
+
+    Returns
+    -------
+    coeffs : 1-D array of length n_terms
+    """
+    x = 2.0 * (two_theta - two_theta.min()) / (two_theta.max() - two_theta.min()) - 1.0
+    c = np.polynomial.chebyshev.chebfit(x, bg_array, n_terms - 1)
+    if len(c) < n_terms:
+        c = np.pad(c, (0, n_terms - len(c)))
+    return c[:n_terms]
 
 
 # ─── Reflection generation ───────────────────────────────────────────────────

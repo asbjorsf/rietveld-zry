@@ -28,56 +28,34 @@ Parameter naming convention
 import numpy as np
 from scipy.optimize import least_squares
 
-from rietveld_engine import (calculate_pattern,
+from rietveld_engine import (calculate_pattern, snip_background,
+                              fit_chebyshev_to_background,
                               rwp as _rwp, rp as _rp, chi2 as _chi2)
 
 # ─── Background initialisation ────────────────────────────────────────────────
 
-N_BG_TERMS = 10   # number of Chebyshev background coefficients
+N_BG_TERMS = 12   # Chebyshev terms — enough for broad curvature, not overfit
+
+# Allowed deviation of each bg coefficient from its SNIP-derived starting value.
+# Tight bounds prevent the optimizer from pulling the background up into the peaks.
+_BG_DELTA = np.array([
+    800, 500, 400, 300, 200, 200,   # low-order terms (large physical range)
+    150, 150, 150, 150, 150, 150,   # higher-order terms (tighter)
+])
 
 
-def _init_chebyshev_background(two_theta, y_obs, n_terms=N_BG_TERMS,
-                                n_windows=50):
+def _init_bg_from_snip(two_theta, y_obs, n_terms=N_BG_TERMS):
     """
-    Estimate starting Chebyshev background via sliding-minimum.
+    Estimate Chebyshev background coefficients using the SNIP algorithm.
 
-    Divides the pattern into overlapping windows, finds the intensity
-    minimum in each, then fits a Chebyshev polynomial through those
-    minimum points.  This gives a starting background that hugs the
-    valleys of the diffraction pattern before the full optimisation.
-
-    numpy.polynomial.chebyshev uses the same T_n recurrence and [-1,1]
-    mapping as our chebyshev_background(), so coefficients are directly
-    compatible.
+    SNIP (Ryan & Jamieson 1988) progressively clips peaks by replacing
+    each point with the average of its neighbours at decreasing distances.
+    The result hugs the true background without overfitting noise.
+    A Chebyshev polynomial is then fitted through the SNIP result so that
+    the coefficients can be refined in the Rietveld optimisation.
     """
-    n      = len(two_theta)
-    wsize  = max(n // n_windows, 1)
-    bg_x, bg_y = [], []
-
-    for i in range(n_windows):
-        s = i * wsize
-        e = min(s + wsize + wsize // 2, n)   # 50 % overlap
-        if s >= n:
-            break
-        idx = s + np.argmin(y_obs[s:e])
-        bg_x.append(two_theta[idx])
-        bg_y.append(y_obs[idx])
-
-    bg_x = np.array(bg_x)
-    bg_y = np.array(bg_y)
-
-    # Map to [-1, 1] (same convention as chebyshev_background)
-    tth_min = two_theta.min()
-    tth_max = two_theta.max()
-    x_norm  = 2.0 * (bg_x - tth_min) / (tth_max - tth_min) - 1.0
-
-    deg    = min(n_terms - 1, len(bg_x) - 2)
-    coeffs = np.polynomial.chebyshev.chebfit(x_norm, bg_y, deg)
-
-    # Pad or truncate to exactly n_terms
-    if len(coeffs) < n_terms:
-        coeffs = np.pad(coeffs, (0, n_terms - len(coeffs)))
-    return coeffs[:n_terms]
+    bg_array = snip_background(y_obs)
+    return fit_chebyshev_to_background(two_theta, bg_array, n_terms)
 
 
 class RietveldRefinement:
@@ -93,8 +71,8 @@ class RietveldRefinement:
 
         # ── Global parameters (initial values) ──────────────────────────────
         self.scale_factors = [1.0] * len(phases)
-        self.bg_coeffs     = _init_chebyshev_background(
-                                 self.two_theta, self.y_obs, N_BG_TERMS)
+        self.bg_coeffs     = _init_bg_from_snip(self.two_theta, self.y_obs)
+        self._bg_coeffs_snip = self.bg_coeffs.copy()   # kept for bounds
         self.U           =  0.010
         self.V           = -0.005
         self.W           =  0.010
@@ -198,6 +176,14 @@ class RietveldRefinement:
             _bounds[f'phase_{i}_a']            = (3.0,   7.0)
             _bounds[f'phase_{i}_c']            = (3.0,   8.0)
             _bounds[f'phase_{i}_z_O']          = (0.10,  0.40)
+
+        # Background: tight bounds around SNIP-derived initial values.
+        # This prevents the optimizer from raising the background into peak tails.
+        delta = _BG_DELTA[:N_BG_TERMS]
+        for j in range(N_BG_TERMS):
+            c0 = self._bg_coeffs_snip[j]
+            d  = delta[j] if j < len(delta) else 150
+            _bounds[f'bg_{j}'] = (c0 - d, c0 + d)
 
         if extra_bounds:
             _bounds.update(extra_bounds)
