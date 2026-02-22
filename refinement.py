@@ -34,14 +34,7 @@ from rietveld_engine import (calculate_pattern, snip_background,
 
 # ─── Background initialisation ────────────────────────────────────────────────
 
-N_BG_TERMS = 12   # Chebyshev terms — enough for broad curvature, not overfit
-
-# Allowed deviation of each bg coefficient from its SNIP-derived starting value.
-# Tight bounds prevent the optimizer from pulling the background up into the peaks.
-_BG_DELTA = np.array([
-    800, 500, 400, 300, 200, 200,   # low-order terms (large physical range)
-    150, 150, 150, 150, 150, 150,   # higher-order terms (tighter)
-])
+N_BG_TERMS = 6   # Chebyshev terms — matches GSAS-II default recommendation (3–6 for lab XRD)
 
 
 def _init_bg_from_snip(two_theta, y_obs, n_terms=N_BG_TERMS):
@@ -177,13 +170,9 @@ class RietveldRefinement:
             _bounds[f'phase_{i}_c']            = (3.0,   8.0)
             _bounds[f'phase_{i}_z_O']          = (0.10,  0.40)
 
-        # Background: tight bounds around SNIP-derived initial values.
-        # This prevents the optimizer from raising the background into peak tails.
-        delta = _BG_DELTA[:N_BG_TERMS]
-        for j in range(N_BG_TERMS):
-            c0 = self._bg_coeffs_snip[j]
-            d  = delta[j] if j < len(delta) else 150
-            _bounds[f'bg_{j}'] = (c0 - d, c0 + d)
+        # Background coefficients: unconstrained — SNIP initialisation places them
+        # in a physically sensible region; 6 Chebyshev terms cannot overfit a smooth bg.
+        # (GSAS-II also leaves Chebyshev background coefficients unconstrained by default.)
 
         if extra_bounds:
             _bounds.update(extra_bounds)
